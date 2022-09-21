@@ -6,7 +6,7 @@ This repository is used to summarise the source code I wrote for my thesis (to b
 In the analysis, Random Forest is the main model will be used. Both regression and classification RF model will be applied to model the 1) YAP localisation corresponds to other cell features and 2) classify the treatment/control data by cell features including YAP ratio.
 
 
-## current avaliable files
+## Current avaliable files
 
 `preprocessing.R`: Deal with data pre-processing.<br />
 `T-learner.R`: Inspired by article Metalearners for estimating heterogeneous treatment effects using machine learning (Künzel et al., 2019), an function for analysing the causal effect of treatment to response variable.<br />
