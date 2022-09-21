@@ -1,0 +1,406 @@
+---
+title: "week8 hparam tuning"
+output: html_document
+date: '2022-09-06'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+data_path = "JuliaSero 020318 1h drug treatments/single cells by condition (3 replicates per file)"
+treatments_list = list.files(path=data_path, pattern=NULL, all.files=FALSE,
+    full.names=FALSE) %>% tools::file_path_sans_ext() %>%
+  .[. != "Control_Nuclei"]
+
+library(tictoc)
+library(parallel)
+detectCores()
+registerDoParallel(cores=64)
+```
+
+
+
+```{r, include=FALSE}
+corr_threshold = 0.99
+df_Control = get_control(data_path=data_path, corr_threshold = corr_threshold)
+x0 <- subset(df_Control[, ], select = c(-Math_logNucByRingYAP))
+y0 <- (subset(df_Control[, ], select = Math_logNucByRingYAP))
+y0 <- y0[,1] 
+
+treatment_method = "VS4718_Nuclei"
+df_Treatment = get_treatment(data_path=data_path, 
+                             ctl_vars=colnames(df_Control),
+                             treatment_method=treatment_method)
+x1 <- subset(df_Treatment[, ], select = c(-Math_logNucByRingYAP))
+y1 <- (subset(df_Treatment[, ], select = Math_logNucByRingYAP))
+y1 <- y1[,1]
+```
+
+```{r tune the control data}
+source("./week8 functions.R")
+
+treatment_method = "Control_Nuclei"
+new_folder = "hparams"
+tic("treatment_method")
+rf_select_result_0_parall = get_param_parallel(x0, y0, 
+                                               SUBSET_SIZE = 5000, 
+                                               ntrees = c(100, 200,300,400,500),
+                                               mtrys=seq(20, ncol(x0), by=1),
+                                               nodesizes=seq(1,5))
+toc()
+
+
+param_0 = rf_select_result_0_parall$mse_grid %>% arrange(oob_mses) %>% .[1,]
+
+write.csv(rf_select_result_0_parall$mse_grid, 
+          sprintf("./hparams/mse_%s.csv", treatment_method), 
+          row.names = FALSE) 
+
+write.csv(param_0, sprintf("./%s/hp_%s.csv", new_folder, treatment_method), 
+          row.names = FALSE)
+```
+
+
+```{r try new oob error}
+# rf_select_result_1_parall = 
+#     get_param_parallel(x1, y1, 
+#                        SUBSET_SIZE = floor(nrow(x1)/10), # tune with 1/10 data (approx 900)
+#                        ntrees = c(100, 200,300,400,500),
+#                        mtrys=seq(20, ncol(x1), by=1),
+#                        nodesizes=seq(1,5))
+```
+
+
+
+```{r pre-tune for each treatment}
+new_folder = "hparams_wk8_rf_q2"
+
+dir.create(sprintf("./%s", new_folder))
+
+for(treatment_method in c("Control_Nuclei",treatments_list)){
+  tic(treatment_method)
+  df_Treatment = get_treatment(data_path=data_path, 
+                               ctl_vars=colnames(df_Control),
+                               treatment_method=treatment_method)
+  
+  # get predictor variables and response variables
+  x1 <- subset(df_Treatment[, ], select = c(-Math_logNucByRingYAP))
+  y1 <- (subset(df_Treatment[, ], select = Math_logNucByRingYAP))
+  y1 <- y1[,1]
+  
+  # tune hparam by oob-mse
+  rf_select_result_1_parall = 
+    get_param_parallel(x1, y1, 
+                       SUBSET_SIZE = 5000, # tune with 5000 subset
+                       ntrees = c(100, 200,300,400,500),
+                       mtrys=seq(20, ncol(x1), by=1),
+                       nodesizes=seq(1,5))
+  
+
+  param_tr = rf_select_result_1_parall$mse_grid %>% arrange(oob_mses) %>% .[1,]
+  
+  # save mse grid just in case for plotting
+  write.csv(rf_select_result_1_parall$mse_grid, 
+            sprintf("./%s/mse_%s.csv", new_folder, treatment_method), 
+            row.names = FALSE) 
+  
+  # write.csv(param_tr, sprintf("./%s/hp_%s.csv", new_folder, treatment_method), 
+  #           row.names = FALSE)
+  
+  toc() #  with parallel
+}
+```
+
+```{r}
+pdf(file=sprintf("./hparams/plot_mse_all_wk8.pdf", treatment_method),
+      width = 8, height = 5)
+for(treatment_method in treatments_list){
+
+  # treatment_method="VS4718_Nuclei"
+  mse_grid = read.csv(sprintf("./hparams/mse_%s.csv", treatment_method))
+  
+  
+  g1 = mse_grid %>%
+    ggplot(aes(x=mtrys, y=oob_mses, color=as.factor(ntree),
+               size=nodesize)) +
+    geom_point(aes(alpha=0.8), ) +
+    scale_color_brewer(palette="Set2")+
+    labs(title = treatment_method, color="ntree")+ scale_alpha(guide = "none")
+  
+  plot(g1)
+
+
+}
+
+dev.off()
+```
+```{r scratch for one tr, include=FALSE}
+# for(treatment_method in treatments_list){
+
+treatment_method="VS4718_Nuclei"
+mse_grid = read.csv(sprintf("./hparams/mse_%s.csv", treatment_method))
+
+
+g1 = mse_grid %>%
+  ggplot(aes(x=mtrys, y=oob_mses, color=as.factor(ntree),
+             size=nodesize)) +
+  geom_point(aes(alpha=0.8), ) +
+  scale_color_brewer(palette="Set2")+
+  labs(title = treatment_method, color="ntree")+ scale_alpha(guide = "none")
+
+plot(g1)
+  
+
+print(mse_grid %>% arrange(oob_mses) %>% .[1,])
+# }
+```
+
+```{r}
+tuned_hparam_list = data.frame()
+# tuned_hparam_list %>% rbind(., best_hparam)
+
+for(treatment_method in c("Control_Nuclei", treatments_list)){
+  mse_grid = read.csv(sprintf("./hparams/mse_%s.csv", treatment_method))
+  
+  best_hparam = mse_grid %>% arrange(oob_mses) %>% .[1,]
+  best_hparam$treatment = treatment_method
+  
+  tuned_hparam_list <- tuned_hparam_list %>% rbind(., best_hparam)
+}
+
+
+
+write.csv(tuned_hparam_list, sprintf("./%s/hparam_all.csv", new_folder), 
+            row.names = FALSE)
+```
+
+# hparam tuning for q1 rf model
+
+```{r, include=FALSE}
+library(randomForest)
+library(MASS)
+library(tidyr)
+library(dplyr)
+library(tibble)
+library(ggplot2)
+library(matrixStats)
+library(tictoc)
+library(glmnet)
+
+require(gridExtra)
+library(doParallel)
+registerDoParallel(cores=64)
+
+
+data_path = "JuliaSero 020318 1h drug treatments/single cells by condition (3 replicates per file)"
+# treatment_method = "VS4718_Nuclei"
+source("./week8 preprocessing.R")
+source("./week8 functions.R")
+treatments_list = list.files(path=data_path, pattern=NULL, all.files=FALSE,
+                             full.names=FALSE) %>% tools::file_path_sans_ext() %>%
+  .[. != "Control_Nuclei"]
+corr_threshold = 0.99 
+df_Control = get_control(corr_threshold = corr_threshold)
+
+
+
+```
+
+```{r}
+# new_folder = "hparams_wk8_q1_all"
+# dir.create(sprintf("./%s", new_folder))
+# 
+# for(treatment_method in treatments_list[3:6]){
+#   tic(treatment_method)
+#   source("./week8 q1 rf single.R")
+#   toc()
+# }
+
+# treatment_method = treatments_list[1]
+# mse_grid = read.csv(sprintf("./%s/mse_%s.csv", new_folder, treatment_method))
+# best_hp = mse_grid %>% arrange(OOB) %>% .[1,]
+# best_hp
+```
+
+```{r tuning for all treatments and get VI}
+new_folder = "hparams_wk8_q1_all"
+dir.create(sprintf("./%s", new_folder))
+dir.create(sprintf("./%s/models", new_folder))
+for(treatment_method in treatments_list[7:15]){
+  tic(treatment_method) # around 900s.+
+  # transform to dataset ----------------
+  df_Treatment = get_treatment(ctl_vars=colnames(df_Control),
+                               treatment_method = treatment_method)
+  
+  df_clf = rbind(df_Control, df_Treatment) %>%
+    mutate(treatment = c(rep(0, nrow(df_Control)), rep(1, nrow(df_Treatment)))) %>% 
+    mutate(treatment=as.factor(treatment))
+  
+  
+  x <- subset(df_clf[, ], select = c(-treatment))
+  y <- (subset(df_clf[, ], select = treatment))
+  y <- y[,1] 
+  # Tune hparam with 8000 data points --------------
+  SUBSET_SIZE = 8000
+  subset_idx = sample(nrow(x), SUBSET_SIZE)
+
+  rf_clf_select_trial = rf_model_selection_parallel(
+    data.matrix(x[subset_idx,]), as.factor(y[subset_idx]),
+    ntrees = c(100, 200,300,400,500),
+    mtrys=seq(5, ncol(x), by=1),
+    nodesizes=seq(1,5))
+  
+  write.csv(rf_clf_select_trial$mse_grid, 
+          sprintf("./%s/mse_%s.csv", new_folder, treatment_method), 
+          row.names = FALSE) 
+  
+  mse_grid = read.csv(sprintf("./%s/mse_%s.csv", new_folder, treatment_method))
+  best_hp = mse_grid %>% arrange(OOB) %>% .[1,]
+  
+  # Fit for all dataset -----------------------
+  TEST_SIZE = 0.3
+  test_indices <- sample(1:nrow(x), size=as.integer(TEST_SIZE*nrow(x)), replace=FALSE)
+  x_train <- x[-test_indices,]
+  y_train <- y[-test_indices]
+  x_test <- x[test_indices,]
+  y_test <- y[test_indices]
+  
+  rf_best = randomForest(x_train, y_train,
+                       # xtest = x_test, ytest = y_test,
+                       ntree = best_hp$ntree,
+                       mtry=best_hp$mtrys,
+                       nodesize = best_hp$nodesize,
+                       importance=TRUE,
+                       parallel=TRUE)
+  # sprintf("default oob error: %.6f; tuned oob error: %.6f", 
+  #       rf_default$err.rate[500,1], rf_best$err.rate[tmp$ntree,1])
+  saveRDS(rf_best, file = sprintf("./%s/models/rf_%s.rda", new_folder, treatment_method))
+    # the test performance of the final model
+  yhat_test <- predict(rf_best, newdata=x_test)
+  
+  # default hyperparmaeter model
+  rf_default <- randomForest(x_train, y_train, parallel=TRUE)
+  yhat_test_default <- predict(rf_default, newdata=x_test)
+  
+  # MSEs
+  test_mse <- mse(as.numeric(y_test), as.numeric(yhat_test))
+  test_mse_default <- mse(as.numeric(y_test), as.numeric(yhat_test_default))
+  
+  cat(sprintf("Test MSE with default hyperparameters: %.6f, Test MSE with OOB-tuned hyperparameters: %.6f\n", 
+              test_mse_default, test_mse))
+  
+  # Saving VI --------------
+  variable_import_two = cbind(importance(rf_best, type=1), importance(rf_best, type=2)) %>%
+    as.data.frame() %>%
+    rownames_to_column("variable")  %>%
+    mutate_if(is.numeric, function(x) x/sum(x))
+  write.csv(variable_import_two, 
+            sprintf("./%s/VI_%s.csv", new_folder, treatment_method), 
+            row.names = FALSE) 
+  
+
+  # toc ----------
+  toc()
+}
+```
+```{r save tuned trained models}
+for(treatment_method in treatments_list[1:5]){
+  tic(treatment_method) # around 150s.+
+  # transform to dataset ----------------
+  df_Treatment = get_treatment(ctl_vars=colnames(df_Control),
+                               treatment_method = treatment_method)
+  
+  df_clf = rbind(df_Control, df_Treatment) %>%
+    mutate(treatment = c(rep(0, nrow(df_Control)), rep(1, nrow(df_Treatment)))) %>% 
+    mutate(treatment=as.factor(treatment))
+  
+  
+  x <- subset(df_clf[, ], select = c(-treatment))
+  y <- (subset(df_clf[, ], select = treatment))
+  y <- y[,1] 
+  
+  # get tuned hparam
+  mse_grid = read.csv(sprintf("./%s/mse_%s.csv", new_folder, treatment_method))
+  best_hp = mse_grid %>% arrange(OOB) %>% .[1,]
+  
+  TEST_SIZE = 0.3
+  test_indices <- sample(1:nrow(x), size=as.integer(TEST_SIZE*nrow(x)), replace=FALSE)
+  x_train <- x[-test_indices,]
+  y_train <- y[-test_indices]
+  x_test <- x[test_indices,]
+  y_test <- y[test_indices]
+  
+  rf_best = randomForest(x_train, y_train,
+                       # xtest = x_test, ytest = y_test,
+                       ntree = best_hp$ntree,
+                       mtry=best_hp$mtrys,
+                       nodesize = best_hp$nodesize,
+                       importance=TRUE,
+                       parallel=TRUE)
+  # sprintf("default oob error: %.6f; tuned oob error: %.6f", 
+  #       rf_default$err.rate[500,1], rf_best$err.rate[tmp$ntree,1])
+  saveRDS(rf_best, file = sprintf("./%s/models/rf_%s.rda", new_folder, treatment_method))
+  toc()
+}
+  
+```
+
+
+
+
+```{r save VI plots}
+dir.create(sprintf("./%s/VI_plots", new_folder))
+for(treatment_method in treatments_list){
+  # Do plots of VI --------------------------------------------------------
+variable_import_two <- read.csv(sprintf("./%s/VI_%s.csv", new_folder, treatment_method))
+
+  # plot variable importance measured by permuting OOB
+  pdf(sprintf("./%s/VI_plots/VI_oob_%s_.pdf", new_folder, treatment_method),
+      height = 6, width = 8)
+  vi_plot_oob <- variable_import_two %>%
+    dplyr::select(-c("MeanDecreaseGini")) %>%
+    pivot_longer(-variable, names_to="varimp_type", values_to="normalised_importance") %>%
+    mutate(var_categ = sapply(variable, get_category)) %>%
+    ggplot(aes(x=reorder(variable, (normalised_importance)),
+               y=normalised_importance, fill=var_categ)) +
+    # scale_color_brewer(palette="Set3")+
+    coord_flip() +
+    geom_col(aes(alpha=0.8), position="dodge") +
+    theme(axis.text.x = element_text(angle = 90, vjust =0.5, hjust=1),
+          legend.position = "right") +
+    labs(x="Variable", y="Normalised Importance",
+         title = sprintf("MeanDecreaseAccuracy for %s",treatment_method),
+         fill="Cell features") + 
+    scale_alpha(guide = "none")
+  print(vi_plot_oob)
+  dev.off()
+  
+  # plot variable importance measured by node impurity(Gini)
+  pdf(sprintf("./%s/VI_plots/VI_gini_%s_.pdf", new_folder, treatment_method),
+      height = 6, width = 8)
+  vi_plot_gini <- variable_import_two %>%
+    dplyr::select(-c("MeanDecreaseAccuracy")) %>%
+    pivot_longer(-variable, names_to="varimp_type", values_to="normalised_importance") %>%
+    mutate(var_categ = sapply(variable, get_category)) %>%
+    ggplot(aes(x=reorder(variable, (normalised_importance)),
+               y=normalised_importance, fill=var_categ)) +
+    coord_flip() +
+    geom_col(aes(alpha=0.8), position="dodge") +
+    theme(axis.text.x = element_text(angle = 90, vjust =0.5, hjust=1),
+          legend.position = "right") +
+    labs(x="Variable", y="Normalised Importance",
+         title = sprintf("MeanDecreaseGini for %s",treatment_method),
+         fill="Cell features") + 
+    scale_alpha(guide = "none")
+  print(vi_plot_gini)
+  dev.off()
+  
+}
+```
+
+```{r}
+saveRDS(rf_best, file = sprintf("./%s/models/rf_%s.rda", new_folder, treatment_method))
+```
+
