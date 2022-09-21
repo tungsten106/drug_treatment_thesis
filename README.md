@@ -8,8 +8,8 @@ In the analysis, Random Forest is the main model will be used. Both regression a
 
 ## current avaliable files
 
-`preprocessing.R`: deal with data pre-processing
-`T-learner.R`: Inspired by article Metalearners for estimating heterogeneous treatment effects using machine learning (Künzel et al., 2019), an function for analysing the causal effect of treatment to response variable.
-`hparan tuning.Rmd`: file used for tune the hyper-parameter for Random Forest models.
-`functions.R`: support functions including parallel operation of hyper-parameter tuning.
+`preprocessing.R`: Deal with data pre-processing.<br />
+`T-learner.R`: Inspired by article Metalearners for estimating heterogeneous treatment effects using machine learning (Künzel et al., 2019), an function for analysing the causal effect of treatment to response variable.<br />
+`hparan tuning.Rmd`: File used for tune the hyper-parameter for Random Forest models.<br />
+`functions.R`: Support functions including parallel operation of hyper-parameter tuning.<br />
 
